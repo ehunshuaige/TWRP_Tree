@@ -37,23 +37,21 @@ jobs:
     - name: Install NDK
       working-directory: Magisk
       run: |
+        # 提前指定安装路径，强制 build.py 将 NDK 解压到 ./ndk
+        export ANDROID_NDK_HOME=$PWD/ndk
         python3 build.py ndk
-        echo "NDK installation directory:"
-        ls -la
-        if [ -d "ndk" ]; then
-          echo "NDK found in Magisk/ndk"
-          echo "ANDROID_NDK_HOME=$PWD/ndk" >> $GITHUB_ENV
-        else
-          echo "NDK directory not found in Magisk"
-          # 尝试在父目录查找
-          if [ -d "../ndk" ]; then
-            echo "NDK found in parent directory"
-            echo "ANDROID_NDK_HOME=$PWD/../ndk" >> $GITHUB_ENV
-          else
-            echo "NDK directory not found anywhere"
-            exit 1
-          fi
+
+        # 验证是否安装成功
+        if [ ! -d "$ANDROID_NDK_HOME" ]; then
+          echo "NDK installation failed, directory $ANDROID_NDK_HOME not found."
+          exit 1
         fi
+
+        echo "NDK installed successfully at $ANDROID_NDK_HOME"
+        ls -la "$ANDROID_NDK_HOME"
+
+        # 将变量写入 GitHub 环境，供后续步骤使用
+        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
 
     - name: Build Magisk
       working-directory: Magisk
