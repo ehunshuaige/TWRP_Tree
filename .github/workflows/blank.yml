@@ -37,52 +37,97 @@ jobs:
     - name: Install NDK
       working-directory: Magisk
       run: |
-        # Magisk 使用 ondk，环境变量为 ONDK_HOME
-        export ONDK_HOME=$PWD/ndk
+        # 执行 Magisk 内置的 NDK 安装脚本（下载并解压 ondk）
         python3 build.py ndk
 
-        # 检查是否安装到预期目录
-        if [ ! -d "$ONDK_HOME" ]; then
-          echo "ONDK_HOME directory not found, trying to locate NDK automatically..."
-          # 查找 ndk-build 所在目录
-          REAL_NDK=$(find . -maxdepth 3 -name "ndk-build" -type f 2>/dev/null | head -1 | xargs dirname)
-          if [ -n "$REAL_NDK" ]; then
-            echo "Found NDK at $REAL_NDK"
-            ln -sf "$REAL_NDK" ndk
-            ONDK_HOME=$PWD/ndk
+        # 自动查找解压后的 ondk 目录（通常为 ondk-r30.0 之类）
+        ONDK_DIR=$(find . -maxdepth 1 -type d -name "ondk-*" | head -1)
+
+        if [ -n "$ONDK_DIR" ]; then
+          echo "Found ondk directory: $ONDK_DIR"
+          # 创建符号链接 ndk -> 实际的 ondk 文件夹
+          ln -sf "$ONDK_DIR" ndk
+          echo "Created symlink ndk -> $ONDK_DIR"
+        else
+          echo "No ondk-* directory found, searching for ndk-build binary..."
+          # 如果找不到 ondk 文件夹，尝试找 ndk-build 的父目录
+          NDK_BUILD_DIR=$(find . -name "ndk-build" -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          if [ -n "$NDK_BUILD_DIR" ]; then
+            echo "Found ndk-build at $NDK_BUILD_DIR"
+            ln -sf "$NDK_BUILD_DIR" ndk
           else
-            echo "Cannot locate NDK anywhere, aborting."
+            echo "Cannot locate NDK, aborting."
             exit 1
           fi
         fi
 
-        echo "NDK ready at $ONDK_HOME"
-        echo "ANDROID_NDK_HOME=$ONDK_HOME" >> $GITHUB_ENV
+        # 确认 ndk 目录存在
+        if [ ! -d "ndk" ]; then
+          echo "Failed to create ndk link."
+          exit 1
+        fi
+
+        echo "NDK ready at $PWD/ndk"
+        ls -la ndk/
+
+        # 将 ANDROID_NDK_HOME 写入环境变量，供后续构建使用
+        echo "ANDROID_NDK_HOME=$PWD/ndk" >> $GITHUB_ENV
 
     - name: Build Magisk
       working-directory: Magisk
       run: |
+        echo "Building Magisk..."
         python3 build.py native
-        echo "Build completed. Checking output:"
+        echo "Build completed. Checking output directory:"
+        ls -la native/out/
+        echo "Searching for magiskboot binary:"
         find . -name "magiskboot" -type f
 
     - name: Copy magiskboot
       run: |
+        echo "Searching for magiskboot in Magisk directory..."
         find Magisk -name "magiskboot" -type f -exec cp {} . \;
-        [ -f "magiskboot" ] || { echo "magiskboot not found"; exit 1; }
-        file magiskboot
+        if [ -f "magiskboot" ]; then
+          echo "magiskboot copied successfully"
+          file magiskboot
+        else
+          echo "ERROR: magiskboot not found"
+          exit 1
+        fi
 
     - name: Extract device tree
       run: |
+        echo "Extracting device tree from initboot.img..."
         ./magiskboot unpack initboot.img
-        [ -f "kernel_dtb" ] && mv kernel_dtb devicetree.dtb || [ -f "dtb" ] && mv dtb devicetree.dtb || { echo "No dtb found"; exit 1; }
+        echo "Unpacked files:"
+        ls -la
+        if [ -f "kernel_dtb" ]; then
+          echo "Found kernel_dtb"
+          mv kernel_dtb devicetree.dtb
+        elif [ -f "dtb" ]; then
+          echo "Found dtb"
+          mv dtb devicetree.dtb
+        else
+          echo "ERROR: No device tree file found"
+          exit 1
+        fi
+        echo "Device tree extracted successfully"
         file devicetree.dtb
 
     - name: Repack initboot.img
       run: |
+        echo "Repacking initboot.img with extracted device tree..."
         ./magiskboot repack initboot.img
-        [ -f "new-boot.img" ] || { echo "Repack failed"; exit 1; }
-        mv new-boot.img newinitboot.img
+        echo "Repacked files:"
+        ls -la
+        if [ -f "new-boot.img" ]; then
+          mv new-boot.img newinitboot.img
+          echo "Repacked image saved as newinitboot.img"
+          file newinitboot.img
+        else
+          echo "ERROR: Repacked image not found"
+          exit 1
+        fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -96,6 +141,8 @@ jobs:
     - name: Generate build report
       run: |
         echo "## Build Report" >> $GITHUB_STEP_SUMMARY
-        echo "- **Status**: Success" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Status**: Success" >> $GITHUB_STEP_SUMMARY
         echo "- **Device Tree**: devicetree.dtb" >> $GITHUB_STEP_SUMMARY
         echo "- **Repacked Image**: newinitboot.img" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source**: Compiled from source" >> $GITHUB_STEP_SUMMARY
