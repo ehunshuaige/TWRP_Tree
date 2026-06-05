@@ -37,77 +37,52 @@ jobs:
     - name: Install NDK
       working-directory: Magisk
       run: |
-        # 提前指定安装路径，强制 build.py 将 NDK 解压到 ./ndk
-        export ANDROID_NDK_HOME=$PWD/ndk
+        # Magisk 使用 ondk，环境变量为 ONDK_HOME
+        export ONDK_HOME=$PWD/ndk
         python3 build.py ndk
 
-        # 验证是否安装成功
-        if [ ! -d "$ANDROID_NDK_HOME" ]; then
-          echo "NDK installation failed, directory $ANDROID_NDK_HOME not found."
-          exit 1
+        # 检查是否安装到预期目录
+        if [ ! -d "$ONDK_HOME" ]; then
+          echo "ONDK_HOME directory not found, trying to locate NDK automatically..."
+          # 查找 ndk-build 所在目录
+          REAL_NDK=$(find . -maxdepth 3 -name "ndk-build" -type f 2>/dev/null | head -1 | xargs dirname)
+          if [ -n "$REAL_NDK" ]; then
+            echo "Found NDK at $REAL_NDK"
+            ln -sf "$REAL_NDK" ndk
+            ONDK_HOME=$PWD/ndk
+          else
+            echo "Cannot locate NDK anywhere, aborting."
+            exit 1
+          fi
         fi
 
-        echo "NDK installed successfully at $ANDROID_NDK_HOME"
-        ls -la "$ANDROID_NDK_HOME"
-
-        # 将变量写入 GitHub 环境，供后续步骤使用
-        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+        echo "NDK ready at $ONDK_HOME"
+        echo "ANDROID_NDK_HOME=$ONDK_HOME" >> $GITHUB_ENV
 
     - name: Build Magisk
       working-directory: Magisk
       run: |
-        echo "Building Magisk..."
         python3 build.py native
-        echo "Build completed. Checking output directory:"
-        ls -la native/out/
-        echo "Searching for magiskboot binary:"
+        echo "Build completed. Checking output:"
         find . -name "magiskboot" -type f
 
     - name: Copy magiskboot
       run: |
-        echo "Searching for magiskboot in Magisk directory..."
         find Magisk -name "magiskboot" -type f -exec cp {} . \;
-        if [ -f "magiskboot" ]; then
-          echo "magiskboot copied successfully"
-          file magiskboot
-        else
-          echo "ERROR: magiskboot not found"
-          exit 1
-        fi
+        [ -f "magiskboot" ] || { echo "magiskboot not found"; exit 1; }
+        file magiskboot
 
     - name: Extract device tree
       run: |
-        echo "Extracting device tree from initboot.img..."
         ./magiskboot unpack initboot.img
-        echo "Unpacked files:"
-        ls -la
-        if [ -f "kernel_dtb" ]; then
-          echo "Found kernel_dtb"
-          mv kernel_dtb devicetree.dtb
-        elif [ -f "dtb" ]; then
-          echo "Found dtb"
-          mv dtb devicetree.dtb
-        else
-          echo "ERROR: No device tree file found"
-          exit 1
-        fi
-        echo "Device tree extracted successfully"
+        [ -f "kernel_dtb" ] && mv kernel_dtb devicetree.dtb || [ -f "dtb" ] && mv dtb devicetree.dtb || { echo "No dtb found"; exit 1; }
         file devicetree.dtb
 
     - name: Repack initboot.img
       run: |
-        echo "Repacking initboot.img with extracted device tree..."
         ./magiskboot repack initboot.img
-        echo "Repacked files:"
-        ls -la
-        if [ -f "new-boot.img" ]; then
-          mv new-boot.img newinitboot.img
-          echo "Repacked image saved as newinitboot.img"
-          file newinitboot.img
-        else
-          echo "ERROR: Repacked image not found"
-          exit 1
-        fi
+        [ -f "new-boot.img" ] || { echo "Repack failed"; exit 1; }
+        mv new-boot.img newinitboot.img
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -121,8 +96,6 @@ jobs:
     - name: Generate build report
       run: |
         echo "## Build Report" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Status**: Success" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: Success" >> $GITHUB_STEP_SUMMARY
         echo "- **Device Tree**: devicetree.dtb" >> $GITHUB_STEP_SUMMARY
         echo "- **Repacked Image**: newinitboot.img" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Date**: $(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_STEP_SUMMARY
-        echo "- **Source**: Compiled from source" >> $GITHUB_STEP_SUMMARY
